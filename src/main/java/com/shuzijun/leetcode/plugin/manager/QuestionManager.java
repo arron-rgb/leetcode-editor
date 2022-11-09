@@ -1,5 +1,8 @@
 package com.shuzijun.leetcode.plugin.manager;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -368,14 +371,6 @@ public class QuestionManager {
     return true;
   }
 
-  private static Map<String, String> map = new HashMap<>() {
-    {
-      put("string", "String");
-      put("integer", "int");
-      put("character", "char");
-    }
-  };
-
   /**
    * queryQuestionData 获取题目数据
    *
@@ -401,10 +396,24 @@ public class QuestionManager {
         String exampleTestcases = jsonObject.getString("exampleTestcases");
         question.setExampleTestcases(exampleTestcases);
 
+        JSONArray topicTags = jsonObject.getJSONArray("topicTags");
+        for (int i = 0, n = topicTags.size(); i < n; i++) {
+          Object topicTag = topicTags.get(i);
+          if (topicTag instanceof JSONObject) {
+            JSONObject tag = (JSONObject) topicTag;
+            if (tag.getString("name") != null && "Design".equals(tag.getString("name"))) {
+              question.setDesign(true);
+            }
+          }
+          if (i == n - 1 && Objects.equals(!question.isDesign(), true)) {
+            question.setDesign(false);
+          }
+        }
+
         JSONObject metaData = jsonObject.getJSONObject("metaData");
         question.setFunctionName(metaData.getString("name"));
         question.setParamTypes(metaData.getJSONArray("params").stream().map(t -> {
-          String type = ((JSONObject)t).getString("type");
+          String type = ((JSONObject) t).getString("type");
           type = typeMapping(type);
           return type;
         }).collect(Collectors.toList()));
@@ -427,27 +436,49 @@ public class QuestionManager {
           question.setArticleLive(Constant.ARTICLE_LIVE_NONE);
         }
 
+
         JSONArray jsonArray = jsonObject.getJSONArray("codeSnippets");
         if (jsonArray == null) {
           question.setCode("Subscribe to unlock.");
-          // todo 这里用中文账号
+          // todo add a prime account in configuration
+          // if current account has no permission to view this question
+          // use prime account to query submit
+          // Question: How to save cookie && how to login?
 
         } else if (codeTypeEnum != null) {
           for (int i = 0; i < jsonArray.size(); i++) {
             JSONObject object = jsonArray.getJSONObject(i);
             if (codeTypeEnum.getType().equals(object.getString("lang"))) {
               question.setLangSlug(object.getString("langSlug"));
-              StringBuffer sb = new StringBuffer();
-              sb.append(codeTypeEnum.getComment()).append(Constant.SUBMIT_REGION_BEGIN).append("\n");
-              sb.append(object.getString("code").replaceAll("\\n", "\n")).append("\n");
-              sb.append(codeTypeEnum.getComment()).append(Constant.SUBMIT_REGION_END).append("\n");
-              question.setCode(sb.toString());
+              String sb = codeTypeEnum.getComment() + Constant.SUBMIT_REGION_BEGIN + "\n" +
+                object.getString("code").replaceAll("\\n", "\n") + "\n" +
+                codeTypeEnum.getComment() + Constant.SUBMIT_REGION_END + "\n";
+              question.setCode(sb);
               break;
             }
             if (i == jsonArray.size() - 1) {
               question.setCode(
                 codeTypeEnum.getComment() + "There is no code of " + codeTypeEnum.getType() + " type for this problem");
             }
+          }
+        }
+
+        if (question.isDesign()) {
+          question.setTitle(question.getTitle() + "Wrapper");
+          String[] cases = exampleTestcases.split("\n");
+//          String filePath = "/Users/arronshentu/Downloads/untitle";
+          String filePath = PersistentConfig.getInstance().getTempFilePath() + "tmp"
+            + VelocityUtils.convert(PersistentConfig.getInstance().getConfig().getCustomFileName(), question);
+          FileUtils.saveFile(filePath, question.getCode());
+          String s = InputUtils.generateTemplateCode(filePath, cases[0], cases[1], question);
+          if (s.isEmpty()) {
+            MessageUtils.getInstance(project).showWarnMsg("Design Code Error", "template code is empty");
+          }
+          question.setDesignCode(s);
+          try {
+            Files.deleteIfExists(Path.of(filePath));
+          } catch (IOException ignored) {
+            // do nothing
           }
         }
         return Boolean.TRUE;
@@ -466,7 +497,11 @@ public class QuestionManager {
   private static String typeMapping(String type) {
     if (type.contains("list")) {
       type = type.replaceAll("list", "List");
+      // basic type to boxed type
       type = type.replaceAll("integer", "Integer");
+      type = type.replaceAll("string", "String");
+      type = type.replaceAll("boolean", "Boolean");
+      type = type.replaceAll("char", "Character");
       return type;
     }
     type = type.replaceAll("character", "char");
@@ -479,7 +514,9 @@ public class QuestionManager {
   private static String getContent(JSONObject jsonObject) {
     StringBuffer sb = new StringBuffer();
     sb.append(jsonObject.getString(URLUtils.getDescContent()));
-    Config config = PersistentConfig.getInstance().getConfig();
+//    Config config = PersistentConfig.getInstance().getConfig();
+    Config config = new Config();
+    config.setShowTopics(true);
     if (config.getShowTopics()) {
       JSONArray topicTagsArray = jsonObject.getJSONArray("topicTags");
       if (topicTagsArray != null && !topicTagsArray.isEmpty()) {
